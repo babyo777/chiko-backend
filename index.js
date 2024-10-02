@@ -5,7 +5,7 @@ import { RecursiveCharacterTextSplitter } from "langchain/text_splitter";
 import { OpenAIEmbeddings } from "@langchain/openai";
 import { MemoryVectorStore } from "langchain/vectorstores/memory";
 import OpenAI from "openai";
-import cheerio from "cheerio";
+import * as cheerio from "cheerio";
 import dotenv from "dotenv";
 import cors from "cors";
 dotenv.config();
