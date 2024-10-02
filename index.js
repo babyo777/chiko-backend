@@ -334,7 +334,7 @@ The goal is to engage the student in a way that makes them think critically, lea
           },
         ],
       },
-      ...history,
+      ...(history || null),
     ],
   });
 
