@@ -1,4 +1,3 @@
-// 1. Import necessary modules
 import express from "express";
 import bodyParser from "body-parser";
 import { RecursiveCharacterTextSplitter } from "langchain/text_splitter";
@@ -49,15 +48,13 @@ app.post("/", async (req, res) => {
   const data = JSON.parse(chatCompletion.choices[0].message.content);
 
   const responseObj = {};
-  const responseTotal = chatCompletion.choices[0].message.content;
+
+  responseObj.followUpQuestions = await generateFollowUpQuestions(message);
 
   if (data.normal_chat) {
     responseObj.answer = await normal_chat_response(message);
   } else {
     responseObj.answer = await socratic_learning_message(message);
-    responseObj.followUpQuestions = await generateFollowUpQuestions(
-      responseTotal
-    );
   }
 
   if (data.requires_images) {
@@ -168,7 +165,6 @@ async function getImages(message) {
     return null;
   }
 }
-// 22. Notify when the server starts listening
 
 async function generateFollowUpQuestions(responseText) {
   const groqResponse = await openai.chat.completions.create({
