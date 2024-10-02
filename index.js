@@ -50,14 +50,14 @@ app.post("/", async (req, res) => {
 
   const responseObj = {};
   const responseTotal = chatCompletion.choices[0].message.content;
-  responseObj.followUpQuestions = await generateFollowUpQuestions(
-    responseTotal
-  );
 
   if (data.normal_chat) {
     responseObj.answer = await normal_chat_response(message);
   } else {
     responseObj.answer = await socratic_learning_message(message);
+    responseObj.followUpQuestions = await generateFollowUpQuestions(
+      responseTotal
+    );
   }
 
   if (data.requires_images) {
