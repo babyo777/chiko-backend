@@ -9,167 +9,65 @@ import * as cheerio from "cheerio";
 import dotenv from "dotenv";
 import cors from "cors";
 dotenv.config();
-// 2. Initialize Express
 const app = express();
 const port = 4000;
-// 3. Middleware
 app.use(cors());
 app.use(bodyParser.json());
-// 4. Initialize Groq and embeddings
 let openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+  baseURL: "https://api.groq.com/openai/v1",
+  apiKey: process.env.GROQ_API_KEY,
 });
 const embeddings = new OpenAIEmbeddings();
-// 5. Define the route for POST requests
 app.post("/", async (req, res) => {
-  // 6. Handle POST requests
-  console.log(`1. Received POST request`);
-  // 7. Extract request data
-  const {
-    message,
-    returnSources = false,
-    embedSourcesInLLMResponse = false,
-    textChunkSize = 800,
-    textChunkOverlap = 200,
-    numberOfSimilarityResults = 2,
-    numberOfPagesToScan = 1,
-  } = req.body;
+  const { message } = req.body;
   if (message.trim().length === 0) return res.status(400).send("Bad Request");
-  console.log(`2. Destructured request data`);
 
-  // 10. Define search engine function
-  async function searchEngineForSources(message) {
-    console.log(`3. Initializing Search Engine Process`);
-    // 11. Initialize Serper API
-    const serperKey = process.env.SERPER_API_KEY;
-    const response = await fetch("https://google.serper.dev/search", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-API-KEY": serperKey,
-      },
-      body: JSON.stringify({ q: message }),
-    });
-    const docs = await response.json();
-    console.log(docs);
-    // 13. Get documents from Serper API
-    const normalizedData = normalizeData(docs.organic);
-    // 14. Process and vectorize the content
-    return await Promise.all(normalizedData.map(fetchAndProcess));
-  }
-  // 15. Normalize data
-  function normalizeData(docs) {
-    return docs
-      .filter((doc) => doc.title && doc.link)
-      .slice(0, numberOfPagesToScan)
-      .map(({ title, link }) => ({ title, link }));
-  }
-  // 16. Fetch page content
-  const fetchPageContent = async (link) => {
-    console.log(`7. Fetching page content for ${link}`);
-    try {
-      const response = await fetch(link);
-      if (!response.ok) {
-        return ""; // skip if fetch fails
-      }
-      const text = await response.text();
-      return extractMainContent(text, link);
-    } catch (error) {
-      console.error(`Error fetching page content for ${link}:`, error);
-      return "";
-    }
-  };
-  // 17. Extract main content from the HTML page
-  function extractMainContent(html, link) {
-    console.log(`8. Extracting main content from HTML for ${link}`);
-    const $ = html.length ? cheerio.load(html) : null;
-    $("script, style, head, nav, footer, iframe, img").remove();
-    return $("body").text().replace(/\s+/g, " ").trim();
-  }
-  // 18. Process and vectorize the content
-  let vectorCount = 0;
-  const fetchAndProcess = async (item) => {
-    const htmlContent = await fetchPageContent(item.link);
-    if (htmlContent && htmlContent.length < 250) return null;
-    const splitText = await new RecursiveCharacterTextSplitter({
-      chunkSize: textChunkSize,
-      chunkOverlap: textChunkOverlap,
-    }).splitText(htmlContent);
-    const vectorStore = await MemoryVectorStore.fromTexts(
-      splitText,
-      { link: item.link, title: item.title },
-      embeddings
-    );
-    vectorCount++;
-    console.log(`9. Processed ${vectorCount} sources for ${item.link}`);
-    return await vectorStore.similaritySearch(
-      message,
-      numberOfSimilarityResults
-    );
-  };
-  // 19. Fetch and process sources
-  const sources = await searchEngineForSources(
-    message,
-    textChunkSize,
-    textChunkOverlap
-  );
-  const sourcesParsed = sources
-    .filter((group) => group !== null) // Filter out null groups
-    .map(
-      (group) =>
-        group
-          .filter((doc) => doc !== null) // Ensure no null documents in each group
-          .map((doc) => {
-            const title = doc.metadata.title;
-            const link = doc.metadata.link;
-            return { title, link };
-          })
-          .filter(
-            (doc, index, self) =>
-              self.findIndex((d) => d.link === doc.link) === index
-          ) // Filter out duplicates
-    );
   const chatCompletion = await openai.chat.completions.create({
-    model: "gpt-4", // Using GPT-4 for better language understanding and responses
+    model: "mixtral-8x7b-32768", // Using the GPT-4 model for better understanding
     messages: [
       {
         role: "system",
         content: `
-            - When the user asks a question, respond concisely with relevant information in Markdown format.
-            - If no relevant results are available, respond with "No relevant results found. Can you clarify or ask another related question?" and engage using the Socratic method to encourage deeper understanding.
+            You are an intelligent assistant. When a user submits a query, analyze it and return only a valid JSON object with the following properties:
+    
+            normal_chat: (boolean) true if the query can be answered in a straightforward manner; false otherwise.
+            socratic_learning: (boolean) true if the query requires a Socratic method of engagement; false otherwise.
+            requires_images: (boolean) true if the response needs images; false otherwise.
+            requires_video: (boolean) true if the response needs a video; false otherwise.
+            requires_source_links: (boolean) true if the response requires website or source links; false otherwise.
+    
+            Only respond with a valid JSON object without any additional commentary or explanation.
           `,
       },
       {
         role: "user",
-        content: `- Use the top results from a similarity search to respond if the user asks a question. Otherwise, respond normally (e.g., if the user says "hey" or "hi", simply reply with "hi"). The results from the search are: ${JSON.stringify(
-          sources
-        )}`,
+        content: message, // User's message here
       },
     ],
-    stream: true, // Enable streaming for real-time responses
   });
-  console.log(`11. Sent content to Groq for chat completion.`);
-  let responseTotal = "";
-  console.log(`12. Streaming response from Groq... \n`);
-  for await (const chunk of chatCompletion) {
-    if (chunk.choices[0].delta && chunk.choices[0].finish_reason !== "stop") {
-      process.stdout.write(chunk.choices[0].delta.content);
-      responseTotal += chunk.choices[0].delta.content;
-    } else {
-      let responseObj = {};
-      returnSources ? (responseObj.sources = sourcesParsed) : null;
-      responseObj.answer = responseTotal;
 
-      responseObj.followUpQuestions = await generateFollowUpQuestions(
-        responseTotal
-      );
+  const data = JSON.parse(chatCompletion.choices[0].message.content);
 
-      responseObj.videos = await getVideos(message);
-      responseObj.videos = await getImages(message);
-      console.log(responseObj);
-      res.status(200).json(responseObj);
-    }
+  const responseObj = {};
+  const responseTotal = chatCompletion.choices[0].message.content;
+  responseObj.followUpQuestions = await generateFollowUpQuestions(
+    responseTotal
+  );
+
+  if (data.normal_chat) {
+    responseObj.answer = await normal_chat_response(message);
+  } else {
+    responseObj.answer = await socratic_learning_message(message);
   }
+
+  if (data.requires_images) {
+    responseObj.images = await getImages(message);
+  }
+  if (data.requires_video) {
+    responseObj.videos = await getVideos(message);
+  }
+
+  res.status(200).json(responseObj);
 });
 
 async function getVideos(message) {
@@ -274,7 +172,7 @@ async function getImages(message) {
 
 async function generateFollowUpQuestions(responseText) {
   const groqResponse = await openai.chat.completions.create({
-    model: "gpt-4",
+    model: "mixtral-8x7b-32768",
     messages: [
       {
         role: "system",
@@ -289,13 +187,127 @@ async function generateFollowUpQuestions(responseText) {
   });
 
   try {
-    // Try parsing the response to JSON
     return JSON.parse(groqResponse.choices[0].message.content);
   } catch (error) {
     return null;
   }
 }
 
+async function normal_chat_response(message) {
+  const chatCompletion = await openai.chat.completions.create({
+    model: "mixtral-8x7b-32768", // Using the GPT-4 model for better understanding
+    messages: [
+      {
+        role: "system",
+        content: ``,
+      },
+      {
+        role: "user",
+        content: message,
+      },
+    ],
+  });
+  return chatCompletion.choices[0].message.content;
+}
+
+async function socratic_learning_message(
+  message,
+  textChunkSize = 800,
+  textChunkOverlap = 200,
+  numberOfSimilarityResults = 2,
+  numberOfPagesToScan = 1
+) {
+  async function searchEngineForSources(message) {
+    console.log(`3. Initializing Search Engine Process`);
+    const serperKey = process.env.SERPER_API_KEY;
+    const response = await fetch("https://google.serper.dev/search", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-API-KEY": serperKey,
+      },
+      body: JSON.stringify({ q: message }),
+    });
+    const docs = await response.json();
+    const normalizedData = normalizeData(docs.organic);
+    return await Promise.all(normalizedData.map(fetchAndProcess));
+  }
+
+  function normalizeData(docs) {
+    return docs
+      .filter((doc) => doc.title && doc.link)
+      .slice(0, numberOfPagesToScan)
+      .map(({ title, link }) => ({ title, link }));
+  }
+
+  const fetchPageContent = async (link) => {
+    try {
+      const response = await fetch(link);
+      if (!response.ok) {
+        return "";
+      }
+      const text = await response.text();
+      return extractMainContent(text, link);
+    } catch (error) {
+      console.error(`Error fetching page content for ${link}:`, error);
+      return "";
+    }
+  };
+
+  function extractMainContent(html, link) {
+    const $ = html.length ? cheerio.load(html) : null;
+    $("script, style, head, nav, footer, iframe, img").remove();
+    return $("body").text().replace(/\s+/g, " ").trim();
+  }
+
+  let vectorCount = 0;
+  const fetchAndProcess = async (item) => {
+    const htmlContent = await fetchPageContent(item.link);
+    if (htmlContent && htmlContent.length < 250) return null;
+    const splitText = await new RecursiveCharacterTextSplitter({
+      chunkSize: textChunkSize,
+      chunkOverlap: textChunkOverlap,
+    }).splitText(htmlContent);
+    const vectorStore = await MemoryVectorStore.fromTexts(
+      splitText,
+      { link: item.link, title: item.title },
+      embeddings
+    );
+    vectorCount++;
+
+    return await vectorStore.similaritySearch(
+      message,
+      numberOfSimilarityResults
+    );
+  };
+
+  const sources = await searchEngineForSources(
+    message,
+    textChunkSize,
+    textChunkOverlap
+  );
+
+  const chatCompletion = await openai.chat.completions.create({
+    messages: [
+      {
+        role: "system",
+        content: `
+          - Here is my query "${message}", respond back with an answer that is as short possible and to the point in Markdown. If you can't find any relevant results, respond with "No relevant results found." 
+          `,
+      },
+      {
+        role: "user",
+        content: ` - Here are the top results from a similarity search: ${JSON.stringify(
+          sources
+        )}. `,
+      },
+    ],
+
+    model: "mixtral-8x7b-32768",
+  });
+
+  return chatCompletion.choices[0].message.content;
+}
 app.listen(port, () => {
   console.log(`Server is listening on port ${port}`);
 });
