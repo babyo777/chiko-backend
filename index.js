@@ -17,8 +17,7 @@ app.use(cors());
 app.use(bodyParser.json());
 // 4. Initialize Groq and embeddings
 let openai = new OpenAI({
-  baseURL: "https://api.groq.com/openai/v1",
-  apiKey: process.env.GROQ_API_KEY,
+  apiKey: process.env.OPENAI_API_KEY,
 });
 const embeddings = new OpenAIEmbeddings();
 // 5. Define the route for POST requests
@@ -130,25 +129,24 @@ app.post("/", async (req, res) => {
               self.findIndex((d) => d.link === doc.link) === index
           ) // Filter out duplicates
     );
-
   const chatCompletion = await openai.chat.completions.create({
+    model: "gpt-4", // Using GPT-4 for better language understanding and responses
     messages: [
       {
         role: "system",
         content: `
-          - If the user provides a query, respond with a concise and relevant answer in Markdown format.
-          - If no relevant results are found, respond with "No relevant results found. Can you clarify or ask another related question?" and engage using the Socratic method of teaching.
-        `,
+            - When the user asks a question, respond concisely with relevant information in Markdown format.
+            - If no relevant results are available, respond with "No relevant results found. Can you clarify or ask another related question?" and engage using the Socratic method to encourage deeper understanding.
+          `,
       },
       {
         role: "user",
-        content: `- Use the top results from a similarity search if the user asks any questions. Otherwise, respond normally (e.g., if the user says "hi", simply reply with "hi"). The results from the search are: ${JSON.stringify(
+        content: `- Use the top results from a similarity search to respond if the user asks a question. Otherwise, respond normally (e.g., if the user says "hey" or "hi", simply reply with "hi"). The results from the search are: ${JSON.stringify(
           sources
         )}`,
       },
     ],
-    stream: true,
-    model: "mixtral-8x7b-32768",
+    stream: true, // Enable streaming for real-time responses
   });
   console.log(`11. Sent content to Groq for chat completion.`);
   let responseTotal = "";
@@ -167,6 +165,7 @@ app.post("/", async (req, res) => {
       );
 
       responseObj.videos = await getVideos(message);
+      responseObj.videos = await getImages(message);
       console.log(responseObj);
       res.status(200).json(responseObj);
     }
@@ -221,14 +220,61 @@ async function getVideos(message) {
   }
 }
 
+async function getImages(message) {
+  const url = "https://google.serper.dev/images";
+  const data = JSON.stringify({
+    q: message,
+  });
+  const requestOptions = {
+    method: "POST",
+    headers: {
+      "X-API-KEY": process.env.SERPER_API_KEY,
+      "Content-Type": "application/json",
+    },
+    body: data,
+  };
+  try {
+    const response = await fetch(url, requestOptions);
+    if (!response.ok) {
+      throw new Error(
+        `Network response was not ok. Status: ${response.status}`
+      );
+    }
+    const responseData = await response.json();
+    const validLinks = await Promise.all(
+      responseData.images.map(async (image) => {
+        const link = image.imageUrl;
+        if (typeof link === "string") {
+          try {
+            const imageResponse = await fetch(link, { method: "HEAD" });
+            if (imageResponse.ok) {
+              const contentType = imageResponse.headers.get("content-type");
+              if (contentType && contentType.startsWith("image/")) {
+                return {
+                  title: image.title,
+                  link: link,
+                };
+              }
+            }
+          } catch (error) {
+            console.error(`Error fetching image link ${link}:`, error);
+          }
+        }
+        return null;
+      })
+    );
+    const filteredLinks = validLinks.filter((link) => link !== null);
+    return filteredLinks.slice(0, 9);
+  } catch (error) {
+    console.error("Error fetching images:", error);
+    return null;
+  }
+}
 // 22. Notify when the server starts listening
-app.listen(port, () => {
-  console.log(`Server is listening on port ${port}`);
-});
 
 async function generateFollowUpQuestions(responseText) {
   const groqResponse = await openai.chat.completions.create({
-    model: "mixtral-8x7b-32768",
+    model: "gpt-4",
     messages: [
       {
         role: "system",
@@ -249,3 +295,7 @@ async function generateFollowUpQuestions(responseText) {
     return null;
   }
 }
+
+app.listen(port, () => {
+  console.log(`Server is listening on port ${port}`);
+});
