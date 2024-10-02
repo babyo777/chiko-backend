@@ -158,7 +158,7 @@ app.post("/", async (req, res) => {
       {
         role: "system",
         content: `
-        - Here is my query "${message}", respond back with an answer to the point in Markdown. If you can't find any relevant results, respond with "No relevant results found." 
+        - Here is my query "${message}", respond back with an answer to the point in Markdown. If you can't find any relevant results, respond with "No relevant results found. and also asking question related to that (use socratic way of teaching)" 
         - ${
           embedSourcesInLLMResponse
             ? "Return the sources used in the response with iterable numbered markdown style annotations."
