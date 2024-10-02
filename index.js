@@ -161,6 +161,11 @@ app.post("/", async (req, res) => {
       let responseObj = {};
       returnSources ? (responseObj.sources = sourcesParsed) : null;
       responseObj.answer = responseTotal;
+
+      responseObj.followUpQuestions = await generateFollowUpQuestions(
+        responseTotal
+      );
+
       responseObj.videos = await getVideos(message);
       console.log(responseObj);
       res.status(200).json(responseObj);
@@ -220,3 +225,27 @@ async function getVideos(message) {
 app.listen(port, () => {
   console.log(`Server is listening on port ${port}`);
 });
+
+async function generateFollowUpQuestions(responseText) {
+  const groqResponse = await openai.chat.completions.create({
+    model: "mixtral-8x7b-32768",
+    messages: [
+      {
+        role: "system",
+        content:
+          "You are a question generator. Generate 3 follow-up questions based on the provided text. Return the questions in an array format.",
+      },
+      {
+        role: "user",
+        content: `Generate 3 follow-up questions based on the following text:\n\n${responseText}\n\nReturn the questions in the following format: ["Question 1", "Question 2", "Question 3"]`,
+      },
+    ],
+  });
+
+  try {
+    // Try parsing the response to JSON
+    return JSON.parse(groqResponse.choices[0].message.content);
+  } catch (error) {
+    return null;
+  }
+}
