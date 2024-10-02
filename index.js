@@ -22,7 +22,8 @@ app.post("/", async (req, res) => {
   if (message.trim().length === 0) return res.status(400).send("Bad Request");
 
   const chatCompletion = await openai.chat.completions.create({
-    model: "mixtral-8x7b-32768", // Using the GPT-4 model for better understanding
+    model: "mixtral-8x7b-32768",
+    response_format: { type: "json_object" },
     messages: [
       {
         role: "system",
@@ -191,12 +192,12 @@ async function generateFollowUpQuestions(responseText) {
 
 async function normal_chat_response(message) {
   const chatCompletion = await openai.chat.completions.create({
-    model: "mixtral-8x7b-32768", // Using the GPT-4 model for better understanding
+    model: "mixtral-8x7b-32768",
     messages: [
-      {
-        role: "system",
-        content: ``,
-      },
+      // {
+      //   role: "system",
+      //   content: ``,
+      // },
       {
         role: "user",
         content: message,
@@ -213,96 +214,101 @@ async function socratic_learning_message(
   numberOfSimilarityResults = 2,
   numberOfPagesToScan = 1
 ) {
-  async function searchEngineForSources(message) {
-    console.log(`3. Initializing Search Engine Process`);
-    const serperKey = process.env.SERPER_API_KEY;
-    const response = await fetch("https://google.serper.dev/search", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-API-KEY": serperKey,
-      },
-      body: JSON.stringify({ q: message }),
-    });
-    const docs = await response.json();
-    const normalizedData = normalizeData(docs.organic);
-    return await Promise.all(normalizedData.map(fetchAndProcess));
-  }
+  try {
+    async function searchEngineForSources(message) {
+      console.log(`3. Initializing Search Engine Process`);
+      const serperKey = process.env.SERPER_API_KEY;
+      const response = await fetch("https://google.serper.dev/search", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-API-KEY": serperKey,
+        },
+        body: JSON.stringify({ q: message }),
+      });
+      const docs = await response.json();
+      const normalizedData = normalizeData(docs.organic);
+      return await Promise.all(normalizedData.map(fetchAndProcess));
+    }
 
-  function normalizeData(docs) {
-    return docs
-      .filter((doc) => doc.title && doc.link)
-      .slice(0, numberOfPagesToScan)
-      .map(({ title, link }) => ({ title, link }));
-  }
+    function normalizeData(docs) {
+      return docs
+        .filter((doc) => doc.title && doc.link)
+        .slice(0, numberOfPagesToScan)
+        .map(({ title, link }) => ({ title, link }));
+    }
 
-  const fetchPageContent = async (link) => {
-    try {
-      const response = await fetch(link);
-      if (!response.ok) {
+    const fetchPageContent = async (link) => {
+      try {
+        const response = await fetch(link);
+        if (!response.ok) {
+          return "";
+        }
+        const text = await response.text();
+        return extractMainContent(text, link);
+      } catch (error) {
+        console.error(`Error fetching page content for ${link}:`, error);
         return "";
       }
-      const text = await response.text();
-      return extractMainContent(text, link);
-    } catch (error) {
-      console.error(`Error fetching page content for ${link}:`, error);
-      return "";
+    };
+
+    function extractMainContent(html, link) {
+      const $ = html.length ? cheerio.load(html) : null;
+      $("script, style, head, nav, footer, iframe, img").remove();
+      return $("body").text().replace(/\s+/g, " ").trim();
     }
-  };
 
-  function extractMainContent(html, link) {
-    const $ = html.length ? cheerio.load(html) : null;
-    $("script, style, head, nav, footer, iframe, img").remove();
-    return $("body").text().replace(/\s+/g, " ").trim();
-  }
+    let vectorCount = 0;
+    const fetchAndProcess = async (item) => {
+      const htmlContent = await fetchPageContent(item.link);
+      if (htmlContent && htmlContent.length < 250) return null;
+      const splitText = await new RecursiveCharacterTextSplitter({
+        chunkSize: textChunkSize,
+        chunkOverlap: textChunkOverlap,
+      }).splitText(htmlContent);
+      const vectorStore = await MemoryVectorStore.fromTexts(
+        splitText,
+        { link: item.link, title: item.title },
+        embeddings
+      );
+      vectorCount++;
 
-  let vectorCount = 0;
-  const fetchAndProcess = async (item) => {
-    const htmlContent = await fetchPageContent(item.link);
-    if (htmlContent && htmlContent.length < 250) return null;
-    const splitText = await new RecursiveCharacterTextSplitter({
-      chunkSize: textChunkSize,
-      chunkOverlap: textChunkOverlap,
-    }).splitText(htmlContent);
-    const vectorStore = await MemoryVectorStore.fromTexts(
-      splitText,
-      { link: item.link, title: item.title },
-      embeddings
-    );
-    vectorCount++;
+      return await vectorStore.similaritySearch(
+        message,
+        numberOfSimilarityResults
+      );
+    };
 
-    return await vectorStore.similaritySearch(
+    const sources = await searchEngineForSources(
       message,
-      numberOfSimilarityResults
+      textChunkSize,
+      textChunkOverlap
     );
-  };
 
-  const sources = await searchEngineForSources(
-    message,
-    textChunkSize,
-    textChunkOverlap
-  );
+    const chatCompletion = await openai.chat.completions.create({
+      messages: [
+        {
+          role: "system",
+          content: `
+            - Here is my query "${message}", respond back with an answer that is as short possible and to the point in Markdown. If you can't find any relevant results, respond with "No relevant results found." 
+            `,
+        },
+        {
+          role: "user",
+          content: ` - Here are the top results from a similarity search: ${JSON.stringify(
+            sources
+          )}. `,
+        },
+      ],
 
-  const chatCompletion = await openai.chat.completions.create({
-    messages: [
-      {
-        role: "system",
-        content: `
-          - Here is my query "${message}", respond back with an answer that is as short possible and to the point in Markdown. If you can't find any relevant results, respond with "No relevant results found." 
-          `,
-      },
-      {
-        role: "user",
-        content: ` - Here are the top results from a similarity search: ${JSON.stringify(
-          sources
-        )}. `,
-      },
-    ],
+      model: "mixtral-8x7b-32768",
+    });
 
-    model: "mixtral-8x7b-32768",
-  });
-
-  return chatCompletion.choices[0].message.content;
+    return chatCompletion.choices[0].message.content;
+  } catch (error) {
+    console.log(error);
+    return null;
+  }
 }
 app.listen(port, () => {
   console.log(`Server is listening on port ${port}`);
