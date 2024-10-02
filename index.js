@@ -329,6 +329,9 @@ Additional Notes:
       },
       ...(history || null),
     ],
+    generationConfig: {
+      maxOutputTokens: 700,
+    },
   });
 
   const result = await chat.sendMessage(message);
