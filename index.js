@@ -9,8 +9,8 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import dotenv from "dotenv";
 import cors from "cors";
 dotenv.config();
-const API_KEY = "AIzaSyCWFXGhEaPfOlRPcGkNJQPb0hD7dM61jks";
-const genAI = new GoogleGenerativeAI(API_KEY);
+
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 const app = express();
 const port = process.env.PORT || 4000;
