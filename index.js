@@ -28,34 +28,16 @@ app.post("/", async (req, res) => {
   // 7. Extract request data
   const {
     message,
-    returnSources = true,
-    returnFollowUpQuestions = true,
-    embedSourcesInLLMResponse = true,
+    returnSources = false,
+    embedSourcesInLLMResponse = false,
     textChunkSize = 800,
     textChunkOverlap = 200,
     numberOfSimilarityResults = 2,
-    numberOfPagesToScan = 2,
+    numberOfPagesToScan = 1,
   } = req.body;
   if (message.trim().length === 0) return res.status(400).send("Bad Request");
   console.log(`2. Destructured request data`);
-  // 8. Define rephrase function
-  async function rephraseInput(inputString) {
-    console.log(`4. Rephrasing input`);
-    // 9. Rephrase input using Groq
-    const groqResponse = await openai.chat.completions.create({
-      model: "mixtral-8x7b-32768",
-      messages: [
-        {
-          role: "system",
-          content:
-            "You are a rephraser and always respond with a rephrased version of the input that is given to a search engine API. Always be succint and use the same words as the input. ONLY RETURN THE REPHRASED VERSION OF THE INPUT.",
-        },
-        { role: "user", content: inputString },
-      ],
-    });
-    console.log(`5. Rephrased input and got answer from Groq`);
-    return groqResponse.choices[0].message.content;
-  }
+
   // 10. Define search engine function
   async function searchEngineForSources(message) {
     console.log(`3. Initializing Search Engine Process`);
@@ -70,10 +52,7 @@ app.post("/", async (req, res) => {
       body: JSON.stringify({ q: message }),
     });
     const docs = await response.json();
-    // 12. Rephrase the message
-    const rephrasedMessage = await rephraseInput(message);
-    console.log(rephrasedMessage);
-    console.log(`6. Rephrased message and got documents from Serper API`);
+    console.log(docs);
     // 13. Get documents from Serper API
     const normalizedData = normalizeData(docs.organic);
     // 14. Process and vectorize the content
@@ -151,25 +130,21 @@ app.post("/", async (req, res) => {
               self.findIndex((d) => d.link === doc.link) === index
           ) // Filter out duplicates
     );
-  console.log(`10. RAG complete sources and preparing response content`);
-  // 20. Prepare the response content
+
   const chatCompletion = await openai.chat.completions.create({
     messages: [
       {
         role: "system",
         content: `
-        - Here is my query "${message}", respond back with an answer to the point in Markdown. If you can't find any relevant results, respond with "No relevant results found. and also asking question related to that (use socratic way of teaching)" 
-        - ${
-          embedSourcesInLLMResponse
-            ? "Return the sources used in the response with iterable numbered markdown style annotations."
-            : ""
-        }" : ""}`,
+          - If the user provides a query, respond with a concise and relevant answer in Markdown format.
+          - If no relevant results are found, respond with "No relevant results found. Can you clarify or ask another related question?" and engage using the Socratic method of teaching.
+        `,
       },
       {
         role: "user",
-        content: ` - Here are the top results from a similarity search: ${JSON.stringify(
+        content: `- Use the top results from a similarity search if the user asks any questions. Otherwise, respond normally (e.g., if the user says "hi", simply reply with "hi"). The results from the search are: ${JSON.stringify(
           sources
-        )}. `,
+        )}`,
       },
     ],
     stream: true,
@@ -186,47 +161,12 @@ app.post("/", async (req, res) => {
       let responseObj = {};
       returnSources ? (responseObj.sources = sourcesParsed) : null;
       responseObj.answer = responseTotal;
-      returnFollowUpQuestions
-        ? (responseObj.followUpQuestions = await generateFollowUpQuestions(
-            responseTotal
-          ))
-        : null;
-      responseObj.images = await getImages(message);
       responseObj.videos = await getVideos(message);
       console.log(responseObj);
       res.status(200).json(responseObj);
     }
   }
 });
-// 21. Generate follow-up questions
-async function generateFollowUpQuestions(responseText) {
-  const groqResponse = await openai.chat.completions.create({
-    model: "mixtral-8x7b-32768",
-    messages: [
-      {
-        role: "system",
-        content:
-          "You are a question generator. Generate 3 follow-up questions based on the provided text. Return the questions in an array format.",
-      },
-      {
-        role: "user",
-        content: `Generate 3 follow-up questions based on the following text:\n\n${responseText}\n\nReturn the questions in the following format: ["Question 1", "Question 2", "Question 3"]`,
-      },
-    ],
-  });
-
-  try {
-    // Try parsing the response to JSON
-    return JSON.parse(groqResponse.choices[0].message.content);
-  } catch (error) {
-    console.error(
-      "Failed to parse Groq response as JSON:",
-      groqResponse.choices[0].message.content
-    );
-    console.error("Error:", error);
-    return ["Could not generate follow-up questions"]; // Fallback value
-  }
-}
 
 async function getVideos(message) {
   const url = "https://google.serper.dev/videos";
@@ -272,57 +212,6 @@ async function getVideos(message) {
     return filteredLinks.slice(0, 9);
   } catch (error) {
     console.error("Error fetching videos:", error);
-    return null;
-  }
-}
-
-async function getImages(message) {
-  const url = "https://google.serper.dev/images";
-  const data = JSON.stringify({
-    q: message,
-  });
-  const requestOptions = {
-    method: "POST",
-    headers: {
-      "X-API-KEY": process.env.SERPER_API_KEY,
-      "Content-Type": "application/json",
-    },
-    body: data,
-  };
-  try {
-    const response = await fetch(url, requestOptions);
-    if (!response.ok) {
-      throw new Error(
-        `Network response was not ok. Status: ${response.status}`
-      );
-    }
-    const responseData = await response.json();
-    const validLinks = await Promise.all(
-      responseData.images.map(async (image) => {
-        const link = image.imageUrl;
-        if (typeof link === "string") {
-          try {
-            const imageResponse = await fetch(link, { method: "HEAD" });
-            if (imageResponse.ok) {
-              const contentType = imageResponse.headers.get("content-type");
-              if (contentType && contentType.startsWith("image/")) {
-                return {
-                  title: image.title,
-                  link: link,
-                };
-              }
-            }
-          } catch (error) {
-            console.error(`Error fetching image link ${link}:`, error);
-          }
-        }
-        return null;
-      })
-    );
-    const filteredLinks = validLinks.filter((link) => link !== null);
-    return filteredLinks.slice(0, 9);
-  } catch (error) {
-    console.error("Error fetching images:", error);
     return null;
   }
 }
